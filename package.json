@@ -1,12 +1,66 @@
 {
   "name": "inviseble",
+  "private": true,
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "electron/main.js",
+  "description": "Invisible AI Assistant",
+  "author": "BryanParreira",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BryanParreira/inviseble.git"
+  },
   "scripts": {
-    "start": "electron ."
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
+    "electron:build": "npm run build && electron-builder",
+    "release": "npm run electron:build -- --publish always"
+  },
+  "build": {
+    "appId": "com.inviseble.app",
+    "productName": "Inviseble",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "BryanParreira",
+      "repo": "inviseble"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.7",
+    "lucide-react": "^0.309.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "electron": "latest",
-    "ollama": "latest"
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8",
+    "wait-on": "^7.2.0"
   }
 }
