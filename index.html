@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { margin: 0; font-family: -apple-system, sans-serif; color: white; background: rgba(10, 10, 10, 0.4); border-radius: 24px; border: 1px solid rgba(255,255,255,0.1); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        .title-bar { -webkit-app-region: drag; height: 40px; background: rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; letter-spacing: 2px; color: rgba(255,255,255,0.4); }
+        #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .msg { padding: 12px 18px; border-radius: 18px; max-width: 80%; font-size: 13px; line-height: 1.5; backdrop-filter: blur(10px); }
+        .user { align-self: flex-end; background: #007AFF; border-bottom-right-radius: 4px; }
+        .ai { align-self: flex-start; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255,255,255,0.1); border-bottom-left-radius: 4px; }
+        .input-area { padding: 25px; background: rgba(0,0,0,0.5); display: flex; gap: 10px; }
+        input { flex: 1; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; border-radius: 20px; padding: 10px 15px; outline: none; }
+        .btn { background: #007AFF; border: none; color: white; border-radius: 50%; width: 44px; height: 44px; cursor: pointer; font-size: 20px; }
+        .vision-btn { background: rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body>
+    <div class="title-bar">INVISEBLE</div>
+    <div id="chat"></div>
+    <div class="input-area">
+        <button class="btn vision-btn" onclick="visionRequest()">📸</button>
+        <input type="text" id="userInput" placeholder="Ask about your screen..." onkeypress="if(event.key==='Enter') sendText()">
+        <button class="btn" onclick="sendText()">↑</button>
+    </div>
+
+    <script>
+        const chat = document.getElementById('chat');
+        const input = document.getElementById('userInput');
+
+        function addBubble(text, type) {
+            const div = document.createElement('div');
+            div.className = `msg ${type}`;
+            div.innerText = text;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+            return div;
+        }
+
+        async function visionRequest() {
+            addBubble("Capturing screen...", "user");
+            try {
+                const dataURL = await window.electronAPI.captureScreen();
+                const base64 = dataURL.split(',')[1];
+                const aiBubble = addBubble("Inviseble is thinking...", "ai");
+
+                const res = await fetch('http://localhost:11434/api/generate', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        model: 'gemma3:4b',
+                        prompt: input.value || "Analyze this screen and tell me what you see.",
+                        stream: false,
+                        images: [base64]
+                    })
+                });
+                const data = await res.json();
+                aiBubble.innerText = data.response;
+            } catch (e) { addBubble("Error: " + e.message, "ai"); }
+        }
+
+        async function sendText() {
+            const prompt = input.value;
+            if (!prompt) return;
+            addBubble(prompt, "user");
+            input.value = "";
+            const aiBubble = addBubble("...", "ai");
+            try {
+                const res = await fetch('http://localhost:11434/api/generate', {
+                    method: 'POST',
+                    body: JSON.stringify({ model: 'gemma3:4b', prompt: prompt, stream: false })
+                });
+                const data = await res.json();
+                aiBubble.innerText = data.response;
+            } catch (e) { aiBubble.innerText = "Error: " + e.message; }
+        }
+    </script>
+</body>
+</html>
