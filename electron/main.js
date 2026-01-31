@@ -1,9 +1,11 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell } = require('electron');
+// ADDED systemPreferences TO THIS LIST
+const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Tray, Menu, nativeImage, session, systemPreferences } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
 let win;
+let tray;
 
 // Auto-update config
 autoUpdater.autoDownload = true;
@@ -11,34 +13,37 @@ autoUpdater.autoInstallOnAppQuit = true;
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 380,
-    height: 650,
-    x: 20,
-    y: 100,
+    width: 700,
+    height: 520,
+    x: 100, y: 100,
     alwaysOnTop: true,
-    transparent: true,     // Essential for glass look
-    frame: false,          // No system borders
-    hasShadow: false,      // No system shadow (we use CSS shadow)
+    transparent: true,
+    frame: false,
+    hasShadow: false,
     resizable: true,
-    vibrancy: 'hud',       // Premium blur
+    vibrancy: 'fullscreen-ui', 
     visualEffectState: 'active',
-    skipTaskbar: false,    // Show in Dock/Taskbar
+    skipTaskbar: true, 
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: false,
-      devTools: isDev
+      devTools: isDev,
+      backgroundThrottling: false 
     }
   });
 
-  // Explicitly show icon in Dock on macOS
-  if (process.platform === 'darwin') {
-    app.dock.show();
-  }
+  // Automatically allow permissions
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    const allowedPermissions = ['media', 'audioCapture', 'desktopCapture'];
+    if (allowedPermissions.includes(permission)) {
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
 
-  // Hide from Zoom/Teams screenshare
-  win.setContentProtection(true);
+  win.setContentProtection(true); 
 
   if (isDev) {
     win.loadURL('http://localhost:5173');
@@ -52,8 +57,7 @@ function createWindow() {
   });
 
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
-    if (win.isVisible()) win.hide();
-    else win.show();
+    toggleWindow();
   });
 
   win.once('ready-to-show', () => {
@@ -61,44 +65,70 @@ function createWindow() {
   });
 }
 
-// --- IPC HANDLERS ---
+// --- TRAY ICON ---
+function createTray() {
+  const size = 22;
+  const buffer = Buffer.alloc(size * size * 4);
+  const center = size / 2;
 
-// 1. Quit App Handler
-ipcMain.handle('quit-app', () => {
-  app.quit();
-});
+  // Draw "Prism" Icon
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dist = Math.abs(x - center) + Math.abs(y - center);
+      if (dist <= 8) {
+        const idx = (y * size + x) * 4;
+        buffer[idx] = 255; buffer[idx+1] = 255; buffer[idx+2] = 255; 
+        if (dist > 5) buffer[idx+3] = 255; 
+        else buffer[idx+3] = 100; 
+      }
+    }
+  }
 
-// 2. Ghost Capture Handler
+  const icon = nativeImage.createFromBitmap(buffer, { width: size, height: size });
+  icon.setTemplateImage(true);
+
+  tray = new Tray(icon);
+  tray.setToolTip('Spectre AI');
+  
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Toggle Spectre', click: toggleWindow },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() }
+  ]);
+  
+  tray.on('click', toggleWindow);
+  tray.on('right-click', () => tray.popUpContextMenu(contextMenu));
+}
+
+function toggleWindow() {
+  if (win.isVisible()) win.hide();
+  else win.show();
+}
+
+ipcMain.handle('quit-app', () => app.quit());
+
 ipcMain.handle('get-screen-capture', async () => {
+  win.setOpacity(0);
+  await new Promise(r => setTimeout(r, 200)); 
   try {
-    win.setOpacity(0);
-    await new Promise(r => setTimeout(r, 200)); 
-    
-    const sources = await desktopCapturer.getSources({ 
-      types: ['screen'], 
-      thumbnailSize: { width: 1920, height: 1080 } 
-    });
-
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } });
     win.setOpacity(1);
-    
-    if (!sources || sources.length === 0) throw new Error("No display found");
-    return sources[0].thumbnail.toDataURL(); 
+    return sources[0].thumbnail.toDataURL();
   } catch (e) {
     win.setOpacity(1);
     throw e;
   }
 });
 
-// Update Events
-autoUpdater.on('update-available', () => {
-  if (win) win.webContents.send('update-status', '⬇️ Update found');
-});
-autoUpdater.on('update-downloaded', () => {
-  if (win) win.webContents.send('update-status', '✅ Restart to update');
+app.whenReady().then(async () => {
+  createWindow();
+  createTray();
+  
+  // Explicitly ask for mic access on macOS
+  if (process.platform === 'darwin') {
+    const status = await systemPreferences.askForMediaAccess('microphone');
+    console.log('Microphone access:', status);
+  }
 });
 
-app.whenReady().then(createWindow);
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

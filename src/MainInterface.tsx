@@ -1,30 +1,147 @@
 import { useState, useEffect, useRef } from 'react';
-import { Eye, ArrowUp, Settings, X, Power } from 'lucide-react';
+import { Eye, ArrowUp, Settings, X, Power, Sparkles, MessageSquare, RefreshCw, Zap } from 'lucide-react';
 import './index.css';
 
-// Types
 type Message = { id: number; text: string; sender: 'user' | 'ai'; };
-type AppSettings = { provider: 'ollama' | 'openai'; apiKey: string; model: string; };
+type Provider = 'ollama' | 'openai' | 'anthropic' | 'gemini' | 'groq';
+type AppSettings = { 
+  provider: Provider; 
+  apiKey: string; 
+  model: string; 
+  systemContext: string;
+};
 
 const MainInterface = () => {
   const [messages, setMessages] = useState<Message[]>([
-    { id: 1, text: "I'm ready. I can see your screen.", sender: 'ai' }
+    { id: 1, text: "Spectre online.", sender: 'ai' }
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   
-  const [config, setConfig] = useState<AppSettings>(() => ({
-    provider: (localStorage.getItem('provider') as any) || 'ollama',
-    apiKey: localStorage.getItem('apiKey') || '',
-    model: localStorage.getItem('model') || 'llama3.2-vision'
-  }));
-
+  // LIVE FEATURE (Combines Audio + Screen)
+  const [isLiveMode, setIsLiveMode] = useState(false);
+  
+  // REFS
+  const recognitionRef = useRef<any>(null);
+  const isLiveRef = useRef(false); 
+  const liveIntervalRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // CONFIG
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [config, setConfig] = useState<AppSettings>(() => ({
+    provider: (localStorage.getItem('provider') as Provider) || 'ollama',
+    apiKey: localStorage.getItem('apiKey') || '',
+    model: localStorage.getItem('model') || 'llama3.2',
+    systemContext: localStorage.getItem('systemContext') || ''
+  }));
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading, input]);
+
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (config.provider === 'ollama' && showSettings) fetchOllamaModels();
+  }, [config.provider, showSettings]);
+
+  useEffect(() => {
+    return () => stopEverything();
+  }, []);
+
+  const stopEverything = () => {
+    isLiveRef.current = false;
+    setIsLiveMode(false);
+    if (recognitionRef.current) recognitionRef.current.stop();
+    if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+  };
+
+  const toggleLiveMode = () => {
+    if (isLiveMode) {
+      stopEverything();
+      addMessage("Live mode stopped.", 'ai');
+    } else {
+      isLiveRef.current = true;
+      setIsLiveMode(true);
+      addMessage("Live Mode Active: Listening & Watching...", 'ai');
+      
+      handleCapture(true);
+      liveIntervalRef.current = setInterval(() => {
+        handleCapture(true);
+      }, 5000);
+
+      startAudioListener();
+    }
+  };
+
+  const startAudioListener = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      addMessage("Microphone not supported in this environment.", 'ai');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true; // IMPORTANT: Stream text immediately
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: any) => {
+      let finalScript = '';
+      
+      // We focus on the latest result to update UI instantly
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalScript += event.results[i][0].transcript;
+        } else {
+          // You could optionally show interim results here
+          // For simplicity and stability, we just append final chunks or 
+          // highly confident interim chunks if needed.
+          // Let's just append FINAL results to input to avoid jitter
+        }
+      }
+      
+      if (finalScript) {
+        setInput(prev => {
+          const prefix = prev.trim() && !prev.endsWith(' ') ? ' ' : '';
+          return prev + prefix + finalScript;
+        });
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      console.warn("Mic Error:", event.error);
+      if (event.error === 'not-allowed') {
+        stopEverything();
+        addMessage("⚠️ Microphone access denied. Please check System Settings > Privacy > Microphone.", 'ai');
+      }
+    };
+
+    recognition.onend = () => {
+      // Auto-restart if we are still in Live Mode
+      if (isLiveRef.current) {
+        try { recognition.start(); } catch (e) { /* ignore */ }
+      }
+    };
+
+    try {
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (e) {
+      console.error("Failed to start mic:", e);
+    }
+  };
+
+  // --- API LOGIC ---
+  const fetchOllamaModels = async () => {
+    setIsFetchingModels(true);
+    try {
+      const res = await fetch('http://localhost:11434/api/tags');
+      const data = await res.json();
+      const names = data.models.map((m: any) => m.name);
+      setOllamaModels(names);
+      if (!names.includes(config.model) && names.length > 0) setConfig(prev => ({ ...prev, model: names[0] }));
+    } catch (e) { console.error(e); } finally { setIsFetchingModels(false); }
+  };
 
   const addMessage = (text: string, sender: 'user' | 'ai') => {
     setMessages(prev => [...prev, { id: Date.now(), text, sender }]);
@@ -34,86 +151,72 @@ const MainInterface = () => {
     localStorage.setItem('provider', config.provider);
     localStorage.setItem('apiKey', config.apiKey);
     localStorage.setItem('model', config.model);
+    localStorage.setItem('systemContext', config.systemContext);
     setShowSettings(false);
-    addMessage("Settings updated.", "ai");
   };
 
-  const quitApplication = () => {
-    if (window.electronAPI && window.electronAPI.quitApp) {
-      window.electronAPI.quitApp();
-    }
-  };
-
-  const callAI = async (prompt: string, imageBase64: string | null) => {
-    setIsLoading(true);
+  const callAI = async (prompt: string, imageBase64: string | null, silent: boolean = false) => {
+    if (!silent) setIsLoading(true);
     try {
-      let url, body, headers: any = { 'Content-Type': 'application/json' };
+      const finalPrompt = config.systemContext ? `CONTEXT: ${config.systemContext}\n\nQUESTION: ${prompt}` : prompt;
+      let url = '', body: any = {}, headers: any = { 'Content-Type': 'application/json' };
 
       if (config.provider === 'ollama') {
         url = 'http://localhost:11434/api/generate';
-        body = {
-          model: config.model,
-          prompt,
-          stream: false,
-          images: imageBase64 ? [imageBase64] : undefined
-        };
+        body = { model: config.model, prompt: finalPrompt, stream: false, images: imageBase64 ? [imageBase64] : undefined };
       } else {
-        url = 'https://api.openai.com/v1/chat/completions';
+        url = config.provider === 'groq' ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
         headers['Authorization'] = `Bearer ${config.apiKey}`;
-        const content: any[] = [{ type: "text", text: prompt }];
-        if (imageBase64) {
-          content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
-        }
+        const content: any[] = [{ type: "text", text: finalPrompt }];
+        if (imageBase64) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
         body = { model: config.model, messages: [{ role: "user", content }] };
       }
 
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const reply = config.provider === 'ollama' ? data.response : data.choices[0].message.content;
       
-      if (data.error) throw new Error(data.error.message || data.error);
+      if (!silent) {
+         addMessage(reply.replace(/\n/g, '<br/>'), 'ai');
+      } else {
+         console.log("Silent Watch Log:", reply);
+      }
 
-      const responseText = config.provider === 'ollama' ? data.response : data.choices[0].message.content;
-      addMessage(responseText.replace(/\n/g, '<br/>'), 'ai');
-
-    } catch (e: any) {
-      addMessage(`Error: ${e.message}`, 'ai');
-    } finally {
-      setIsLoading(false);
+    } catch (e: any) { 
+       if(!silent) addMessage(`Error: ${e.message}`, 'ai'); 
+    } finally { 
+       if(!silent) setIsLoading(false); 
     }
   };
 
-  const handleCapture = async () => {
-    if (isLoading) return;
-    addMessage("Scanning screen...", "user");
+  const handleSendText = async () => {
+    if (!input.trim() || isLoading) return;
+    const txt = input; setInput(""); addMessage(txt, "user");
+    await callAI(txt, null);
+  };
+
+  const handleCapture = async (silent: boolean = false) => {
+    if (isLoading && !silent) return;
+    if (!silent) addMessage("Analyzing screen...", "user");
     try {
       const dataURL = await window.electronAPI.captureScreen();
       const base64 = dataURL.split(',')[1];
-      const prompt = input || "What is on this screen?";
-      setInput("");
-      addMessage("Thinking...", "ai");
-      await callAI(prompt, base64);
-    } catch (e: any) {
-      addMessage(`Capture Error: ${e.message}`, 'ai');
-    }
-  };
-
-  const handleSend = async () => {
-    if (!input || isLoading) return;
-    const txt = input;
-    setInput("");
-    addMessage(txt, "user");
-    addMessage("...", "ai");
-    await callAI(txt, null);
+      const prompt = input || (silent ? "Briefly list major changes." : "What is on this screen?");
+      if (!silent) setInput("");
+      await callAI(prompt, base64, silent);
+    } catch (e: any) { if (!silent) addMessage(`Capture Failed: ${e.message}`, 'ai'); }
   };
 
   return (
     <div className="app-container">
-      <div className="header">
-        <span className="brand">INVISEBLE</span>
-        <button className="icon-btn" onClick={() => setShowSettings(true)}>
-          <Settings size={16} />
-        </button>
-      </div>
+      {/* Invisible Drag Handle */}
+      <div className="header-drag-area"></div>
+
+      <button className="settings-trigger" onClick={() => setShowSettings(true)}>
+        <Settings size={20} />
+      </button>
 
       <div className="chat-area">
         {messages.map((msg) => (
@@ -121,24 +224,39 @@ const MainInterface = () => {
              <div dangerouslySetInnerHTML={{ __html: msg.text }} />
           </div>
         ))}
-        {isLoading && <div className="message ai">...</div>}
+        {isLoading && <div className="message ai">Thinking...</div>}
         <div ref={chatEndRef} />
       </div>
 
-      <div className="command-bar-container">
-        <div className="command-bar">
-          <button className="eye-btn" onClick={handleCapture} disabled={isLoading} title="See Screen">
-            <Eye size={18} />
+      <div className="input-section">
+        <div className="suggestions">
+          <button className={`chip ${isLiveMode ? 'active' : ''}`} onClick={toggleLiveMode}>
+            <Zap size={12} fill={isLiveMode ? "white" : "none"} /> {isLiveMode ? 'Live On' : 'Start Live'}
           </button>
+          <button className="chip" onClick={() => setInput("Summarize meeting notes")}>
+            <MessageSquare size={12} /> Notes
+          </button>
+          <button className="chip" onClick={() => setInput("Draft a reply")}>
+            <Sparkles size={12} /> Reply
+          </button>
+        </div>
+
+        <div className="input-wrapper">
+          <button className="action-btn" onClick={() => handleCapture(false)} title="Analyze Screen">
+            <Eye size={20} />
+          </button>
+
           <input 
-            type="text" 
-            placeholder="Ask AI..." 
+            className="input-field"
+            placeholder={isLiveMode ? "Listening & Watching..." : "Ask Spectre..."}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
+            autoFocus
           />
-          <button className="send-btn" onClick={handleSend} disabled={!input}>
-            <ArrowUp size={18} />
+
+          <button className={`action-btn ${input ? 'active' : ''}`} onClick={handleSendText}>
+            <ArrowUp size={20} />
           </button>
         </div>
       </div>
@@ -146,50 +264,45 @@ const MainInterface = () => {
       {showSettings && (
         <div className="settings-overlay">
           <div className="settings-header">
-            <span className="settings-title">Configuration</span>
-            <button className="icon-btn" onClick={() => setShowSettings(false)}><X size={18}/></button>
+            <span className="settings-title">Spectre Settings</span>
+            <button onClick={() => setShowSettings(false)} style={{background:'none', border:'none', color:'white', cursor:'pointer'}}><X size={22}/></button>
           </div>
           
-          <div className="setting-group">
-            <label>Provider</label>
-            <select 
-              className="setting-input"
-              value={config.provider} 
-              onChange={(e) => setConfig({...config, provider: e.target.value as any})}
-            >
-              <option value="ollama">Local (Ollama)</option>
-              <option value="openai">Cloud (OpenAI / Groq)</option>
-            </select>
-          </div>
-
-          {config.provider === 'openai' && (
+          <div className="settings-scroll">
             <div className="setting-group">
-              <label>API Key</label>
-              <input 
-                className="setting-input"
-                type="password" 
-                value={config.apiKey}
-                onChange={(e) => setConfig({...config, apiKey: e.target.value})}
-                placeholder="sk-..." 
-              />
+              <span className="setting-label">System Context</span>
+              <textarea className="setting-textarea" placeholder="I am a React Developer..." value={config.systemContext} onChange={(e) => setConfig({...config, systemContext: e.target.value})} />
             </div>
-          )}
-
-          <div className="setting-group">
-            <label>Model Name</label>
-            <input 
-              className="setting-input"
-              type="text" 
-              value={config.model}
-              onChange={(e) => setConfig({...config, model: e.target.value})}
-            />
+            <div className="setting-group">
+              <span className="setting-label">AI Provider</span>
+              <select className="setting-select" value={config.provider} onChange={(e) => setConfig({...config, provider: e.target.value as Provider})}>
+                <option value="ollama">Ollama (Private)</option>
+                <option value="openai">OpenAI</option>
+                <option value="groq">Groq</option>
+              </select>
+            </div>
+            {config.provider === 'ollama' ? (
+              <div className="setting-group">
+                 <div style={{display:'flex', justifyContent:'space-between'}}>
+                    <span className="setting-label">Local Model</span>
+                    <button className="refresh-btn" onClick={fetchOllamaModels}>Scan</button>
+                 </div>
+                 {ollamaModels.length > 0 ? (
+                   <select className="setting-select" value={config.model} onChange={(e) => setConfig({...config, model: e.target.value})}>{ollamaModels.map(m => <option key={m} value={m}>{m}</option>)}</select>
+                 ) : (
+                   <input className="setting-input" value={config.model} onChange={(e) => setConfig({...config, model: e.target.value})}/>
+                 )}
+              </div>
+            ) : (
+              <div className="setting-group">
+                <span className="setting-label">API Key</span>
+                <input className="setting-input" type="password" value={config.apiKey} onChange={(e) => setConfig({...config, apiKey: e.target.value})} />
+              </div>
+            )}
           </div>
 
-          <button className="save-btn" onClick={saveSettings}>Save Changes</button>
-          
-          <button className="quit-btn" onClick={quitApplication}>
-            <Power size={14} /> Quit Application
-          </button>
+          <button className="save-btn" onClick={saveSettings}>Save Configuration</button>
+          <button className="quit-btn" onClick={() => window.electronAPI.quitApp()}><Power size={16} /> Quit Spectre</button>
         </div>
       )}
     </div>
