@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Tray, Menu, nativeImage, session, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Tray, Menu, nativeImage, session } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
@@ -6,18 +6,13 @@ const isDev = !app.isPackaged;
 let win;
 let tray;
 
-// --- FIX: SPOOF USER AGENT & ENABLE SPEECH ---
-// This tricks Google into thinking we are a standard Chrome browser
-app.commandLine.appendSwitch('enable-speech-dispatcher');
-const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 720,
-    height: 540,
+    width: 680,
+    height: 520,
     x: 100, y: 100,
     alwaysOnTop: true,
     transparent: true,
@@ -32,27 +27,17 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       devTools: isDev,
-      webSecurity: true, // Keep secure
+      webSecurity: true,
     }
   });
-
-  // Apply the Chrome User Agent
-  win.webContents.setUserAgent(userAgent);
 
   win.setContentProtection(true);
-
-  // --- PERMISSIONS ---
+  
+  // Permissions
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    const allowed = ['media', 'audio-capture', 'display-capture', 'speech-recognition'];
-    if (allowed.includes(permission)) callback(true);
+    if (permission === 'media' || permission === 'display-capture') callback(true);
     else callback(false);
   });
-
-  if (process.platform === 'darwin') {
-    if (systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
-      systemPreferences.askForMediaAccess('microphone');
-    }
-  }
 
   if (isDev) win.loadURL('http://localhost:5173');
   else win.loadFile(path.join(__dirname, '../dist/index.html'));
@@ -65,19 +50,16 @@ function createWindow() {
   globalShortcut.register('CommandOrControl+Shift+Space', () => toggleWindow());
 }
 
-// --- UPDATER EVENTS ---
+// Updater Logic
 ipcMain.handle('check-for-updates', () => autoUpdater.checkForUpdates());
 ipcMain.handle('download-update', () => autoUpdater.downloadUpdate());
 ipcMain.handle('quit-and-install', () => autoUpdater.quitAndInstall());
 
-autoUpdater.on('checking-for-update', () => win.webContents.send('update-msg', { status: 'checking' }));
 autoUpdater.on('update-available', (info) => win.webContents.send('update-msg', { status: 'available', version: info.version }));
-autoUpdater.on('update-not-available', () => win.webContents.send('update-msg', { status: 'latest' }));
 autoUpdater.on('download-progress', (p) => win.webContents.send('update-msg', { status: 'downloading', percent: p.percent }));
 autoUpdater.on('update-downloaded', () => win.webContents.send('update-msg', { status: 'ready' }));
-autoUpdater.on('error', (err) => win.webContents.send('update-msg', { status: 'error', error: err.message }));
 
-// --- TRAY ---
+// Tray
 function createTray() {
   const size = 22;
   const buffer = Buffer.alloc(size * size * 4);
@@ -94,10 +76,8 @@ function createTray() {
   }
   const icon = nativeImage.createFromBitmap(buffer, { width: size, height: size });
   icon.setTemplateImage(true);
-
   tray = new Tray(icon);
   tray.setToolTip('Spectre AI');
-  
   const contextMenu = Menu.buildFromTemplate([
     { label: 'Toggle Spectre', click: toggleWindow },
     { label: 'Quit', click: () => app.quit() }
