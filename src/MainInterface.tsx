@@ -1,30 +1,27 @@
 import { useState, useEffect, useRef } from 'react';
-import { Eye, ArrowUp, Settings, X, Power, Sparkles, MessageSquare, RefreshCw, Zap } from 'lucide-react';
+import { Eye, ArrowUp, Settings, X, Power, Sparkles, MessageSquare, Zap, Activity } from 'lucide-react';
 import './index.css';
 
 type Message = { id: number; text: string; sender: 'user' | 'ai'; };
 type Provider = 'ollama' | 'openai' | 'anthropic' | 'gemini' | 'groq';
-type AppSettings = { 
-  provider: Provider; 
-  apiKey: string; 
-  model: string; 
-  systemContext: string;
-};
+type AppSettings = { provider: Provider; apiKey: string; model: string; systemContext: string; };
 
 const MainInterface = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    { id: 1, text: "Spectre online.", sender: 'ai' }
-  ]);
+  const [messages, setMessages] = useState<Message[]>([{ id: 1, text: "Spectre online.", sender: 'ai' }]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   
-  // LIVE FEATURE (Combines Audio + Screen)
+  // LIVE MODE STATE
   const [isLiveMode, setIsLiveMode] = useState(false);
-  
+  const [volumeLevel, setVolumeLevel] = useState(0); // For Visualizer
+
   // REFS
   const recognitionRef = useRef<any>(null);
-  const isLiveRef = useRef(false); 
+  const audioContextRef = useRef<any>(null);
+  const analyserRef = useRef<any>(null);
+  const sourceRef = useRef<any>(null);
+  const isLiveRef = useRef(false);
   const liveIntervalRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -39,20 +36,16 @@ const MainInterface = () => {
   }));
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading, input]);
-
-  useEffect(() => {
-    if (config.provider === 'ollama' && showSettings) fetchOllamaModels();
-  }, [config.provider, showSettings]);
-
-  useEffect(() => {
-    return () => stopEverything();
-  }, []);
+  useEffect(() => { if (config.provider === 'ollama' && showSettings) fetchOllamaModels(); }, [config.provider, showSettings]);
+  useEffect(() => { return () => stopEverything(); }, []);
 
   const stopEverything = () => {
     isLiveRef.current = false;
     setIsLiveMode(false);
+    setVolumeLevel(0);
     if (recognitionRef.current) recognitionRef.current.stop();
     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+    if (audioContextRef.current) audioContextRef.current.close();
   };
 
   const toggleLiveMode = () => {
@@ -62,76 +55,73 @@ const MainInterface = () => {
     } else {
       isLiveRef.current = true;
       setIsLiveMode(true);
-      addMessage("Live Mode Active: Listening & Watching...", 'ai');
+      addMessage("Live Mode Active. Please ensure audio is audible to your mic (use Speakers).", 'ai');
       
+      // 1. Screen Watcher
       handleCapture(true);
-      liveIntervalRef.current = setInterval(() => {
-        handleCapture(true);
-      }, 5000);
+      liveIntervalRef.current = setInterval(() => { handleCapture(true); }, 5000);
 
+      // 2. Audio Listener & Visualizer
       startAudioListener();
     }
   };
 
-  const startAudioListener = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      addMessage("Microphone not supported in this environment.", 'ai');
-      return;
+  const startAudioListener = async () => {
+    // A. VISUALIZER (To verify input)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      analyser.fftSize = 256;
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      audioContextRef.current = audioContext;
+      
+      const updateVolume = () => {
+        if (!isLiveRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
+        // Calculate average volume
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
+        const average = sum / bufferLength;
+        setVolumeLevel(average); // 0 to 255
+        requestAnimationFrame(updateVolume);
+      };
+      updateVolume();
+    } catch (e) {
+      console.error("Mic Access Error for Visualizer:", e);
     }
+
+    // B. DICTATION ENGINE
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = true; // IMPORTANT: Stream text immediately
+    recognition.interimResults = true;
     recognition.lang = 'en-US';
 
     recognition.onresult = (event: any) => {
-      let finalScript = '';
-      
-      // We focus on the latest result to update UI instantly
+      let final = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalScript += event.results[i][0].transcript;
-        } else {
-          // You could optionally show interim results here
-          // For simplicity and stability, we just append final chunks or 
-          // highly confident interim chunks if needed.
-          // Let's just append FINAL results to input to avoid jitter
-        }
+        if (event.results[i].isFinal) final += event.results[i][0].transcript;
       }
-      
-      if (finalScript) {
-        setInput(prev => {
-          const prefix = prev.trim() && !prev.endsWith(' ') ? ' ' : '';
-          return prev + prefix + finalScript;
-        });
-      }
-    };
-
-    recognition.onerror = (event: any) => {
-      console.warn("Mic Error:", event.error);
-      if (event.error === 'not-allowed') {
-        stopEverything();
-        addMessage("⚠️ Microphone access denied. Please check System Settings > Privacy > Microphone.", 'ai');
+      if (final) {
+        setInput(prev => prev + (prev.trim() && !prev.endsWith(' ') ? ' ' : '') + final);
       }
     };
 
     recognition.onend = () => {
-      // Auto-restart if we are still in Live Mode
-      if (isLiveRef.current) {
-        try { recognition.start(); } catch (e) { /* ignore */ }
-      }
+      if (isLiveRef.current) try { recognition.start(); } catch (e) {}
     };
 
-    try {
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch (e) {
-      console.error("Failed to start mic:", e);
-    }
+    recognition.start();
+    recognitionRef.current = recognition;
   };
 
-  // --- API LOGIC ---
   const fetchOllamaModels = async () => {
     setIsFetchingModels(true);
     try {
@@ -160,7 +150,6 @@ const MainInterface = () => {
     try {
       const finalPrompt = config.systemContext ? `CONTEXT: ${config.systemContext}\n\nQUESTION: ${prompt}` : prompt;
       let url = '', body: any = {}, headers: any = { 'Content-Type': 'application/json' };
-
       if (config.provider === 'ollama') {
         url = 'http://localhost:11434/api/generate';
         body = { model: config.model, prompt: finalPrompt, stream: false, images: imageBase64 ? [imageBase64] : undefined };
@@ -171,24 +160,13 @@ const MainInterface = () => {
         if (imageBase64) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
         body = { model: config.model, messages: [{ role: "user", content }] };
       }
-
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
-
       const reply = config.provider === 'ollama' ? data.response : data.choices[0].message.content;
-      
-      if (!silent) {
-         addMessage(reply.replace(/\n/g, '<br/>'), 'ai');
-      } else {
-         console.log("Silent Watch Log:", reply);
-      }
-
-    } catch (e: any) { 
-       if(!silent) addMessage(`Error: ${e.message}`, 'ai'); 
-    } finally { 
-       if(!silent) setIsLoading(false); 
-    }
+      if (!silent) addMessage(reply.replace(/\n/g, '<br/>'), 'ai');
+      else console.log("Silent Log:", reply);
+    } catch (e: any) { if(!silent) addMessage(`Error: ${e.message}`, 'ai'); } finally { if(!silent) setIsLoading(false); }
   };
 
   const handleSendText = async () => {
@@ -211,18 +189,13 @@ const MainInterface = () => {
 
   return (
     <div className="app-container">
-      {/* Invisible Drag Handle */}
       <div className="header-drag-area"></div>
 
-      <button className="settings-trigger" onClick={() => setShowSettings(true)}>
-        <Settings size={20} />
-      </button>
+      <button className="settings-trigger" onClick={() => setShowSettings(true)}><Settings size={20} /></button>
 
       <div className="chat-area">
         {messages.map((msg) => (
-          <div key={msg.id} className={`message ${msg.sender}`}>
-             <div dangerouslySetInnerHTML={{ __html: msg.text }} />
-          </div>
+          <div key={msg.id} className={`message ${msg.sender}`}><div dangerouslySetInnerHTML={{ __html: msg.text }} /></div>
         ))}
         {isLoading && <div className="message ai">Thinking...</div>}
         <div ref={chatEndRef} />
@@ -231,43 +204,42 @@ const MainInterface = () => {
       <div className="input-section">
         <div className="suggestions">
           <button className={`chip ${isLiveMode ? 'active' : ''}`} onClick={toggleLiveMode}>
-            <Zap size={12} fill={isLiveMode ? "white" : "none"} /> {isLiveMode ? 'Live On' : 'Start Live'}
+            {isLiveMode ? <Activity size={12} className="spin" /> : <Zap size={12} />} {isLiveMode ? 'Live Active' : 'Start Live Mode'}
           </button>
-          <button className="chip" onClick={() => setInput("Summarize meeting notes")}>
-            <MessageSquare size={12} /> Notes
-          </button>
-          <button className="chip" onClick={() => setInput("Draft a reply")}>
-            <Sparkles size={12} /> Reply
-          </button>
+          <button className="chip" onClick={() => setInput("Summarize meeting notes")}><MessageSquare size={12} /> Notes</button>
+          <button className="chip" onClick={() => setInput("Draft a reply")}><Sparkles size={12} /> Reply</button>
         </div>
 
-        <div className="input-wrapper">
-          <button className="action-btn" onClick={() => handleCapture(false)} title="Analyze Screen">
-            <Eye size={20} />
-          </button>
+        <div className="input-wrapper" style={{position: 'relative', overflow: 'hidden'}}>
+          {/* VOLUME VISUALIZER BACKGROUND */}
+          {isLiveMode && (
+            <div style={{
+              position: 'absolute', bottom: 0, left: 0, height: '3px',
+              width: `${Math.min(volumeLevel * 2, 100)}%`, // Moves based on volume
+              background: '#22c55e', transition: 'width 0.05s ease', opacity: 0.8
+            }} />
+          )}
 
+          <button className="action-btn" onClick={() => handleCapture(false)} title="Analyze Screen"><Eye size={20} /></button>
           <input 
-            className="input-field"
-            placeholder={isLiveMode ? "Listening & Watching..." : "Ask Spectre..."}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
-            autoFocus
+            className="input-field" 
+            placeholder={isLiveMode ? "Listening to room audio..." : "Ask Spectre..."} 
+            value={input} 
+            onChange={(e) => setInput(e.target.value)} 
+            onKeyDown={(e) => e.key === 'Enter' && handleSendText()} 
+            autoFocus 
           />
-
-          <button className={`action-btn ${input ? 'active' : ''}`} onClick={handleSendText}>
-            <ArrowUp size={20} />
-          </button>
+          <button className={`action-btn ${input ? 'active' : ''}`} onClick={handleSendText}><ArrowUp size={20} /></button>
         </div>
       </div>
 
       {showSettings && (
         <div className="settings-overlay">
+          {/* Settings UI same as before */}
           <div className="settings-header">
             <span className="settings-title">Spectre Settings</span>
             <button onClick={() => setShowSettings(false)} style={{background:'none', border:'none', color:'white', cursor:'pointer'}}><X size={22}/></button>
           </div>
-          
           <div className="settings-scroll">
             <div className="setting-group">
               <span className="setting-label">System Context</span>
@@ -300,7 +272,6 @@ const MainInterface = () => {
               </div>
             )}
           </div>
-
           <button className="save-btn" onClick={saveSettings}>Save Configuration</button>
           <button className="quit-btn" onClick={() => window.electronAPI.quitApp()}><Power size={16} /> Quit Spectre</button>
         </div>
@@ -308,5 +279,4 @@ const MainInterface = () => {
     </div>
   );
 };
-
 export default MainInterface;
