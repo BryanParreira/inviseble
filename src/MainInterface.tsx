@@ -1,286 +1,279 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from 'react';
-import { Eye, ArrowUp, Settings, X, Power, Sparkles, Copy, RefreshCw, Terminal, Search, Bug, FileText, Paperclip, Clipboard } from 'lucide-react';
+import { Eye, ArrowUp, Settings, X, Mic, MicOff, Maximize2, Minimize2, RefreshCw, Copy, Activity } from 'lucide-react';
 import { MarkdownMessage } from './MarkdownMessage';
 import './index.css';
 
-const MainInterface = () => {
-  // Load initial messages from local storage (Memory)
-  const loadMemory = () => {
-    try {
-      const saved = localStorage.getItem('spectre_memory');
-      return saved ? JSON.parse(saved) : [{ id: 1, text: "Spectre Ready. Drag files or paste context.", sender: 'ai' }];
-    } catch (e) { return [{ id: 1, text: "Spectre Ready.", sender: 'ai' }]; }
-  };
+// The URL of our local Python Brain
+const BRAIN_URL = "http://127.0.0.1:11435";
 
-  const [messages, setMessages] = useState(loadMemory);
+const MainInterface = () => {
+  // STATE
+  const [messages, setMessages] = useState([{ id: 1, text: "Spectre (Local Brain) Ready.", sender: 'ai' }]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showPrompts, setShowPrompts] = useState(false);
+  const [attachment, setAttachment] = useState(null);
   
-  // ATTACHMENTS (Image OR Text File)
-  const [attachment, setAttachment] = useState(null); // { type: 'image' | 'file', content: string, name: string }
-  const [clipboardDetected, setClipboardDetected] = useState("");
+  // POWER FEATURES
+  const [isLive, setIsLive] = useState(false);
+  const [isHudMode, setIsHudMode] = useState(false);
+  const [activeBattlecards, setActiveBattlecards] = useState([]);
+  const [transcriptContext, setTranscriptContext] = useState("");
+  const [brainHealth, setBrainHealth] = useState("checking"); // checking | online | offline
 
-  const [config, setConfig] = useState({
-    provider: (localStorage.getItem('provider') || 'ollama'),
-    apiKey: localStorage.getItem('apiKey') || '',
-    model: localStorage.getItem('model') || 'llama3.2',
-    systemContext: localStorage.getItem('systemContext') || ''
-  });
-  const [ollamaModels, setOllamaModels] = useState([]);
   const chatEndRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordingIntervalRef = useRef(null);
 
-  // SAVE MEMORY
+  // --- INITIALIZATION ---
   useEffect(() => {
-    localStorage.setItem('spectre_memory', JSON.stringify(messages.slice(-20))); // Keep last 20 messages
+    checkBrainHealth();
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading, attachment]);
+  }, [messages, activeBattlecards]);
 
-  // INITIAL LOAD & EVENTS
-  useEffect(() => {
-    if (config.provider === 'ollama') fetchOllamaModels();
+  const checkBrainHealth = async () => {
+    try {
+      const res = await fetch(`${BRAIN_URL}/health`);
+      if (res.ok) setBrainHealth("online");
+      else setBrainHealth("offline");
+    } catch (e) {
+      setBrainHealth("offline");
+    }
+  };
 
-    // GOD MODE: Listen for wake up
-    if (window.electronAPI?.onAppWokeUp) {
-      window.electronAPI.onAppWokeUp(async () => {
-        try {
-          const text = await navigator.clipboard.readText();
-          if (text && text.trim().length > 0) {
-            setClipboardDetected(text.substring(0, 50) + "...");
-            // Optional: Auto-paste if you want aggressive mode
-            // setInput(prev => prev + " \n" + text);
-          }
-        } catch (e) {}
-      });
+  // --- 1. LOCAL LIVE MODE (Via Python) ---
+  const toggleLiveMode = () => { isLive ? stopLiveMode() : startLiveMode(); };
+
+  const startLiveMode = async () => {
+    if (brainHealth !== "online") {
+      addMessage("❌ Python Brain is offline. Is server.py running?", 'ai');
+      await checkBrainHealth(); // Retry check
+      return;
     }
 
-    // Drag & Drop Handlers
-    const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); };
-    const handleDrop = async (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const files = e.dataTransfer.files;
-      if (files && files.length > 0) {
-        const file = files[0];
-        // Read file content
-        const text = await file.text();
-        setAttachment({ type: 'file', content: text, name: file.name });
-      }
-    };
-
-    window.addEventListener('dragover', handleDragOver);
-    window.addEventListener('drop', handleDrop);
-    return () => {
-      window.removeEventListener('dragover', handleDragOver);
-      window.removeEventListener('drop', handleDrop);
-    };
-  }, []);
-
-  const fetchOllamaModels = async () => {
     try {
-      const res = await fetch('http://localhost:11434/api/tags');
+      // Get Microphone Stream
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorder.start();
+      setIsLive(true);
+
+      // SEND CHUNKS TO PYTHON EVERY 3 SECONDS
+      // This creates "Real-time" feeling. Faster interval = lower latency but more API calls.
+      recordingIntervalRef.current = setInterval(() => {
+        if (mediaRecorder.state === "recording") {
+          mediaRecorder.stop(); // Stop to flush data
+          // Restart immediately is handled in onstop below to ensure continuity
+        }
+      }, 3000);
+
+      mediaRecorder.onstop = async () => {
+        if (!isLive) return; // Stop requested
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        audioChunksRef.current = []; // Reset buffer
+        
+        // Send to Python Brain
+        sendAudioToBrain(audioBlob);
+
+        // Restart recording immediately if still live
+        mediaRecorder.start(); 
+      };
+
+    } catch (e) {
+      addMessage(`❌ Mic Error: ${e.message}`, 'ai');
+      setIsLive(false);
+    }
+  };
+
+  const stopLiveMode = () => {
+    if (mediaRecorderRef.current) mediaRecorderRef.current.stop(); // Final flush
+    if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    
+    // Stop all tracks to release mic
+    if (mediaRecorderRef.current?.stream) {
+      mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+    }
+    
+    setIsLive(false);
+  };
+
+  const sendAudioToBrain = async (blob) => {
+    const formData = new FormData();
+    formData.append("file", blob);
+
+    try {
+      const res = await fetch(`${BRAIN_URL}/transcribe`, { method: "POST", body: formData });
       const data = await res.json();
-      setOllamaModels(data.models.map((m) => m.name));
+      
+      if (data.text && data.text.length > 2) {
+        // We got text!
+        console.log("🗣️ Heard:", data.text);
+        setTranscriptContext(prev => (prev + " " + data.text).slice(-1000));
+        
+        // Ask Brain for Context/Battlecards
+        analyzeContext(data.text);
+      }
+    } catch (e) {
+      console.error("Brain Transcription Failed:", e);
+    }
+  };
+
+  const analyzeContext = async (text) => {
+    try {
+      const res = await fetch(`${BRAIN_URL}/analyze-context`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      });
+      const data = await res.json();
+      
+      if (data.matches && data.matches.length > 0) {
+        data.matches.forEach(card => triggerBattlecard(card));
+      }
     } catch (e) {}
   };
 
-  const saveSettings = () => {
-    localStorage.setItem('provider', config.provider);
-    localStorage.setItem('apiKey', config.apiKey);
-    localStorage.setItem('model', config.model);
-    localStorage.setItem('systemContext', config.systemContext);
-    setShowSettings(false);
+  // --- 2. BATTLECARDS UI ---
+  const triggerBattlecard = (card) => {
+    setActiveBattlecards(p => {
+      if (p.find(c => c.title === card.title)) return p;
+      return [...p, { ...card, id: Date.now() }];
+    });
+    setTimeout(() => setActiveBattlecards(p => p.filter(c => c.title !== card.title)), 20000);
   };
 
-  const addMessage = (text, sender) => setMessages(p => [...p, { id: Date.now(), text, sender }]);
-  
-  const handleClearMemory = () => {
-    setMessages([{ id: Date.now(), text: "Memory cleared.", sender: 'ai' }]);
-    localStorage.removeItem('spectre_memory');
+  // --- 3. HUD TOGGLE ---
+  const toggleHudMode = async () => {
+    const newMode = !isHudMode;
+    setIsHudMode(newMode);
+    if (newMode) await window.electronAPI.setWindowSize(450, 60);
+    else await window.electronAPI.setWindowSize(800, 600);
   };
 
-  const handleCapture = async () => {
-    try {
-      const dataURL = await window.electronAPI.captureScreen();
-      const base64 = dataURL.split(',')[1];
-      setAttachment({ type: 'image', content: base64, name: 'Screenshot' });
-    } catch (e) { addMessage("Capture failed.", 'ai'); }
-  };
-
-  const handlePasteClipboard = async () => {
-    const text = await navigator.clipboard.readText();
-    setInput(prev => prev + (prev ? "\n" : "") + text);
-    setClipboardDetected("");
-  };
-
+  // --- 4. STANDARD CHAT & SETTINGS ---
   const handleSend = async () => {
     if ((!input.trim() && !attachment) || isLoading) return;
+    const txt = input; setInput(""); setAttachment(null);
+    addMessage(txt, "user");
     
-    const txt = input;
-    const att = attachment;
-    
-    setInput("");
-    setAttachment(null);
-    setShowPrompts(false);
-    setClipboardDetected("");
-
-    // Display User Message
-    let displayTxt = txt;
-    if (att) displayTxt = `<i>[${att.type === 'image' ? 'Image' : 'File'}: ${att.name}]</i><br/>${txt}`;
-    addMessage(displayTxt, "user");
-
-    // Construct Context
-    let fullPrompt = txt;
-    let imageBase64 = null;
-
-    if (att) {
-      if (att.type === 'file') {
-        fullPrompt = `FILE CONTENT (${att.name}):\n${att.content}\n\nUSER QUESTION:\n${txt}`;
-      } else if (att.type === 'image') {
-        imageBase64 = att.content;
-      }
-    }
-
-    await callAI(fullPrompt, imageBase64);
+    // Call Ollama directly or via Python Brain (Python is better for consistency)
+    // For this example, we keep the direct Ollama call for chat, but you could route this to Python too.
+    await callOllama(txt);
   };
 
-  const callAI = async (prompt, imageBase64) => {
+  const callOllama = async (prompt) => {
     setIsLoading(true);
     try {
-      const finalPrompt = config.systemContext ? `SYSTEM: ${config.systemContext}\n\nUSER: ${prompt}` : prompt;
-      let url = '', body = {}, headers = { 'Content-Type': 'application/json' };
-      
-      if (config.provider === 'ollama') {
-        url = 'http://localhost:11434/api/generate';
-        body = { model: config.model, prompt: finalPrompt, stream: false, images: imageBase64 ? [imageBase64] : undefined };
-      } else {
-        url = config.provider === 'groq' ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
-        headers['Authorization'] = `Bearer ${config.apiKey}`;
-        const content = [{ type: "text", text: finalPrompt }];
-        if (imageBase64) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
-        body = { model: config.model, messages: [{ role: "user", content }] };
-      }
-
-      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      const context = isLive ? `CONTEXT [Live Transcript]: ${transcriptContext}\n\n` : '';
+      const res = await fetch('http://localhost:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: config.model, prompt: context + prompt, stream: false })
+      });
       const data = await res.json();
-      const reply = config.provider === 'ollama' ? data.response : data.choices[0].message.content;
-      
-      addMessage(reply, 'ai');
-    } catch (e) { addMessage(`Error: ${e.message}`, 'ai'); } 
+      addMessage(data.response, 'ai');
+    } catch (e) { addMessage(`Error: ${e.message}`, 'ai'); }
     finally { setIsLoading(false); }
   };
 
+  const addMessage = (text, sender) => setMessages(p => [...p, { id: Date.now(), text, sender }]);
+
+  // --- RENDER HUD MODE ---
+  if (isHudMode) {
+    return (
+      <div className="app-container hud-mode" style={{overflow:'hidden'}}>
+        <div className="hud-drag"
+             onMouseEnter={() => window.electronAPI.setIgnoreMouse(false)}
+             onMouseLeave={() => window.electronAPI.setIgnoreMouse(true, {forward:true})}>
+          
+          {/* Status Dot */}
+          <div className={`dot ${isLive ? 'pulse-ring' : ''}`} 
+               style={{background: brainHealth !== 'online' ? '#555' : (isLive ? '#ef4444' : '#22c55e')}} />
+          
+          <div style={{flex:1, color:'white', fontSize:13, fontWeight:500, overflow:'hidden', whiteSpace:'nowrap', marginLeft: 10}}>
+            {activeBattlecards.length > 0 ? `💡 ${activeBattlecards[activeBattlecards.length-1].title}` : (isLive ? "Listening (Local)..." : "Spectre HUD")}
+          </div>
+
+          <div style={{display:'flex', gap:8}}>
+            <button onClick={toggleLiveMode} style={{background:'none', border:'none', color: isLive ? '#ef4444':'#aaa'}}>
+              {isLive ? <MicOff size={16}/> : <Mic size={16}/>}
+            </button>
+            <button onClick={toggleHudMode} style={{background:'none', border:'none', color:'white'}}>
+              <Maximize2 size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- RENDER FULL MODE ---
   return (
     <div className="app-container">
       <div className="header-drag-area"></div>
       
-      {/* HEADER CONTROLS */}
-      <div className="status-indicator">
-        <div className={`dot ${config.provider === 'ollama' ? '' : 'offline'}`} />
-        <span>{config.provider === 'ollama' ? 'LOCAL' : 'CLOUD'}</span>
-      </div>
-      
-      <div style={{position:'absolute', top:16, right:16, zIndex:50, display:'flex', gap:10}}>
-        <button className="settings-trigger" onClick={handleClearMemory} title="Clear Memory" style={{position:'static'}}><RefreshCw size={16} /></button>
-        <button className="settings-trigger" onClick={() => setShowSettings(true)} style={{position:'static'}}><Settings size={18} /></button>
-      </div>
-
-      {/* CHAT AREA */}
-      <div className="chat-area">
-        {messages.map((msg) => (
-          <div key={msg.id} className="message-group">
-            {msg.sender === 'ai' && (
-              <div className="message-actions">
-                <button className="msg-btn" onClick={() => navigator.clipboard.writeText(msg.text)} title="Copy"><Copy size={12} /></button>
-              </div>
-            )}
-            <div className={`message ${msg.sender}`}>
-              {msg.sender === 'ai' ? <MarkdownMessage content={msg.text} /> : <div dangerouslySetInnerHTML={{ __html: msg.text }} />}
-            </div>
+      <div className="battlecard-container">
+        {activeBattlecards.map(c => (
+          <div key={c.id} className="battlecard">
+            <div style={{flex:1}}><span className="battlecard-title">{c.title}</span><div className="battlecard-content">{c.content}</div></div>
+            <button className="battlecard-close" onClick={() => setActiveBattlecards(p => p.filter(x => x.id !== c.id))}><X size={14}/></button>
           </div>
         ))}
-        {isLoading && <div className="message ai">Thinking...</div>}
+      </div>
+
+      <div className="status-indicator">
+        <div className={`dot ${brainHealth === 'online' ? '' : 'offline'}`} />
+        <span>{brainHealth === 'online' ? 'BRAIN ONLINE' : 'BRAIN OFFLINE'}</span>
+      </div>
+      
+      <div style={{position:'absolute', top:16, right:16, zIndex:50, display:'flex', gap:10, WebkitAppRegion:'no-drag'}}>
+        <button 
+          className={`settings-trigger ${isLive?'pulse-ring':''}`} 
+          onClick={toggleLiveMode} 
+          style={{color: isLive ? '#ef4444' : (brainHealth==='online' ? '#aaa' : '#555')}}
+          disabled={brainHealth !== 'online'}
+        >
+          {isLive ? <MicOff size={18} /> : <Mic size={18} />}
+        </button>
+        <button className="settings-trigger" onClick={toggleHudMode}><Minimize2 size={18} /></button>
+        <button className="settings-trigger" onClick={() => setShowSettings(true)}><Settings size={18} /></button>
+      </div>
+
+      <div className="chat-area">
+        {messages.map(m => (
+          <div key={m.id} className={`message-group`}>
+            <div className={`message ${m.sender}`}>{m.sender==='ai' ? <MarkdownMessage content={m.text}/> : m.text}</div>
+          </div>
+        ))}
         <div ref={chatEndRef} />
       </div>
 
-      {/* GOD MODE CLIPBOARD DETECTOR */}
-      {clipboardDetected && !input && (
-        <div style={{
-          position:'absolute', bottom: 80, left:20, right:20, 
-          background:'rgba(59, 130, 246, 0.2)', border:'1px solid #3b82f6', 
-          borderRadius:8, padding:'8px 12px', display:'flex', alignItems:'center', justifyContent:'space-between',
-          fontSize:12, color:'#93c5fd', cursor:'pointer', backdropFilter:'blur(10px)', zIndex:60
-        }} onClick={handlePasteClipboard}>
-          <div style={{display:'flex', alignItems:'center', gap:8}}>
-            <Clipboard size={14}/> <span>Paste from clipboard: "{clipboardDetected}"</span>
-          </div>
-          <ArrowUp size={14}/>
-        </div>
-      )}
-
-      {/* PROMPT LIBRARY */}
-      {showPrompts && (
-        <div className="prompt-menu">
-          <div className="prompt-item" onClick={() => { setInput("Explain this code logic"); setShowPrompts(false); }}><Terminal size={14}/> Explain Code</div>
-          <div className="prompt-item" onClick={() => { setInput("Refactor this for performance"); setShowPrompts(false); }}><Sparkles size={14}/> Refactor</div>
-          <div className="prompt-item" onClick={() => { setInput("Find bugs in this snippet"); setShowPrompts(false); }}><Bug size={14}/> Find Bugs</div>
-        </div>
-      )}
-
-      {/* INPUT AREA */}
       <div className="input-section">
-        {attachment && (
-          <div className="attachment-preview">
-            {attachment.type === 'image' ? <img src={`data:image/jpeg;base64,${attachment.content}`} className="preview-thumb" /> : <FileText size={16} color="#aaa"/>}
-            <span className="preview-text">{attachment.name.substring(0,20)}</span>
-            <button className="preview-close" onClick={() => setAttachment(null)}><X size={14}/></button>
-          </div>
-        )}
-
         <div className="input-wrapper">
-          <button className={`action-btn ${attachment?.type === 'image' ? 'active' : ''}`} onClick={handleCapture} title="Capture Screen"><Eye size={20} /></button>
-          <input 
-            className="input-field" 
-            placeholder="Ask or Drag Files... (Type / for prompts)" 
-            value={input} 
-            onChange={(e) => {
-              setInput(e.target.value);
-              setShowPrompts(e.target.value === '/');
-            }}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            autoFocus 
-          />
-          <button className={`action-btn ${input || attachment ? 'active' : ''}`} onClick={handleSend}><ArrowUp size={20} /></button>
+          <input className="input-field" placeholder="Ask Spectre..." value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} autoFocus />
+          <button className="action-btn" onClick={handleSend}><ArrowUp size={20}/></button>
         </div>
       </div>
 
-      {/* SETTINGS OVERLAY */}
       {showSettings && (
         <div className="settings-overlay">
-          <div className="settings-header"><span>Settings</span><button onClick={() => setShowSettings(false)} style={{background:'none',border:'none',color:'white',cursor:'pointer'}}><X size={20}/></button></div>
-          <div className="setting-row">
-            <label style={{fontSize:12,color:'#888'}}>AI Provider</label>
-            <select className="styled-select" value={config.provider} onChange={(e) => setConfig({...config, provider: e.target.value})}>
-              <option value="ollama">Ollama (Local)</option>
-              <option value="openai">OpenAI</option>
-              <option value="groq">Groq</option>
-            </select>
+          <div className="settings-header"><span>Settings</span><button onClick={() => setShowSettings(false)}><X size={20}/></button></div>
+          <div style={{padding:'20px 0', color:'#888', fontSize:13}}>
+            <p><strong>Python Brain Status:</strong> {brainHealth.toUpperCase()}</p>
+            <p>Ensure <code>server.py</code> is running on port 11435.</p>
           </div>
-          {config.provider === 'ollama' ? (
-             <div className="setting-row">
-               <label style={{fontSize:12,color:'#888'}}>Local Model</label>
-               <select className="styled-select" value={config.model} onChange={(e) => setConfig({...config, model: e.target.value})}>{ollamaModels.map(m => <option key={m} value={m}>{m}</option>)}</select>
-             </div>
-          ) : (
-            <>
-              <div className="setting-row"><label style={{fontSize:12,color:'#888'}}>API Key</label><input className="styled-input" type="password" value={config.apiKey} onChange={(e) => setConfig({...config, apiKey: e.target.value})} /></div>
-              <div className="setting-row"><label style={{fontSize:12,color:'#888'}}>Model Name</label><input className="styled-input" value={config.model} onChange={(e) => setConfig({...config, model: e.target.value})} /></div>
-            </>
-          )}
-          <div className="setting-row"><label style={{fontSize:12,color:'#888'}}>System Context</label><textarea className="styled-input" style={{height:80}} value={config.systemContext} onChange={(e) => setConfig({...config, systemContext: e.target.value})} /></div>
-          <button className="btn-primary" onClick={saveSettings}>Save Changes</button>
-          <button className="btn-danger" onClick={() => window.electronAPI.quitApp()}>Quit App</button>
+          <button className="btn-primary" onClick={() => setShowSettings(false)}>Close</button>
         </div>
       )}
     </div>

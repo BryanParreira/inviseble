@@ -9,6 +9,7 @@
   --text-main: #ffffff;
   --text-dim: rgba(255, 255, 255, 0.6);
   --success: #22c55e;
+  --danger: #ef4444;
 }
 
 body { margin: 0; font-family: 'Inter', sans-serif; background: transparent; color: var(--text-main); height: 100vh; overflow: hidden; user-select: none; }
@@ -22,18 +23,19 @@ body { margin: 0; font-family: 'Inter', sans-serif; background: transparent; col
   border: 1px solid var(--glass-border);
   border-radius: 16px;
   display: flex; flex-direction: column; overflow: hidden; position: relative;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); /* Smooth resize for HUD */
 }
 
 .header-drag-area { height: 32px; width: 100%; position: absolute; top: 0; left: 0; z-index: 10; -webkit-app-region: drag; }
 
-/* STATUS DOT (Local AI) */
+/* STATUS DOT */
 .status-indicator {
   position: absolute; top: 16px; left: 20px; z-index: 20;
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; font-weight: 600; color: var(--text-dim);
   pointer-events: none;
 }
-.dot { width: 6px; height: 6px; background: var(--success); border-radius: 50%; box-shadow: 0 0 8px var(--success); }
+.dot { width: 6px; height: 6px; background: var(--success); border-radius: 50%; box-shadow: 0 0 8px var(--success); transition: all 0.3s ease; }
 .dot.offline { background: #555; box-shadow: none; }
 
 /* CHAT AREA */
@@ -50,7 +52,7 @@ body { margin: 0; font-family: 'Inter', sans-serif; background: transparent; col
 .ai { align-self: flex-start; color: #eee; font-weight: 400; padding-right: 20px; }
 .ai code { font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.3); padding: 2px 5px; border-radius: 4px; font-size: 12px; }
 
-/* MESSAGE ACTIONS (Copy/Regen) */
+/* MESSAGE ACTIONS */
 .message-actions {
   position: absolute; right: 0; top: -20px;
   display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s;
@@ -90,7 +92,7 @@ body { margin: 0; font-family: 'Inter', sans-serif; background: transparent; col
 .action-btn:hover { color: white; background: rgba(255,255,255,0.1); }
 .action-btn.active { color: var(--accent); background: rgba(59, 130, 246, 0.15); }
 
-/* PROMPT LIBRARY (Slash Menu) */
+/* PROMPT LIBRARY */
 .prompt-menu {
   position: absolute; bottom: 70px; left: 20px; width: 200px;
   background: rgba(20, 20, 20, 0.95); border: 1px solid rgba(255,255,255,0.1);
@@ -109,9 +111,89 @@ body { margin: 0; font-family: 'Inter', sans-serif; background: transparent; col
 .settings-trigger:hover { color: white; }
 
 .settings-overlay { position: absolute; inset: 0; background: rgba(12, 12, 14, 0.98); z-index: 100; display: flex; flex-direction: column; -webkit-app-region: no-drag; padding: 30px; }
-/* (Keep previous settings styles if needed, simplified here) */
 .settings-header { display: flex; justify-content: space-between; margin-bottom: 20px; color: white; font-weight: 700; }
 .setting-row { margin-bottom: 15px; }
 .styled-input, .styled-select { width: 100%; background: #222; border: 1px solid #333; color: white; padding: 10px; border-radius: 8px; margin-top: 5px; outline: none; }
 .btn-primary { background: white; color: black; border: none; padding: 12px; border-radius: 8px; width: 100%; font-weight: 600; cursor: pointer; margin-top: 20px; }
 .btn-danger { background: rgba(255,60,60,0.1); color: #ff5555; border: 1px solid #ff5555; padding: 10px; border-radius: 8px; margin-top: 10px; cursor: pointer; width: 100%; }
+
+/* --- NEW FEATURES CSS --- */
+
+/* HUD MODE OVERRIDES */
+.hud-mode {
+  background: rgba(10, 10, 12, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50px; /* Pill shape */
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+
+.hud-mode .chat-area,
+.hud-mode .input-section,
+.hud-mode .header-drag-area,
+.hud-mode .status-indicator {
+  display: none !important; /* Hide non-essential elements in HUD */
+}
+
+/* HUD DRAG HANDLE */
+.hud-drag {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 15px; cursor: grab;
+  -webkit-app-region: drag;
+  padding: 0 20px;
+}
+.hud-drag:active { cursor: grabbing; }
+
+/* LIVE PULSE ANIMATION */
+.pulse-ring {
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  animation: pulse-red 2s infinite;
+}
+@keyframes pulse-red {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+/* BATTLECARDS CONTAINER */
+.battlecard-container {
+  position: absolute;
+  bottom: 90px;
+  right: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 40;
+  pointer-events: none; /* Let clicks pass through gaps */
+}
+
+/* INDIVIDUAL BATTLECARD */
+.battlecard {
+  background: rgba(25, 25, 35, 0.95);
+  border-left: 4px solid var(--accent);
+  padding: 12px 16px;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  animation: slideInRight 0.3s ease-out;
+  pointer-events: auto; /* Clickable */
+  box-shadow: 0 5px 20px rgba(0,0,0,0.4);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.05);
+}
+@keyframes slideInRight { from { transform: translateX(50px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+.battlecard-title { font-weight: 700; color: var(--accent); margin-bottom: 4px; display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.battlecard-content { color: #ddd; line-height: 1.4; font-size: 13px; }
+.battlecard-close { background: none; border: none; color: #666; cursor: pointer; padding: 4px; margin-left: 10px; display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+.battlecard-close:hover { color: #fff; background: rgba(255,255,255,0.1); }
+
+/* CUSTOM SCROLLBAR */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
