@@ -1,7 +1,7 @@
 {
   "name": "aura-ai",
   "private": true,
-  "version": "2.0.4",
+  "version": "2.0.5",
   "main": "electron/main.js",
   "description": "The Invisible AI Overlay",
   "author": "BryanParreira",
@@ -29,12 +29,17 @@
     ],
     "mac": {
       "icon": "build/icon.icns",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
         "dmg",
         "zip"
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "notarize": {
+        "teamId": "${APPLE_TEAM_ID}"
+      },
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Aura needs mic access.",
         "NSScreenCaptureUsageDescription": "Aura needs screen access."
