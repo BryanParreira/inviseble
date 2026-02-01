@@ -1,19 +1,12 @@
-// src/vite-env.d.ts
 /// <reference types="vite/client" />
 
 interface ElectronAPI {
   captureScreen: () => Promise<string>;
   quitApp: () => Promise<void>;
-  
-  // --- Window & Mouse Control ---
   setIgnoreMouse: (ignore: boolean, options?: any) => Promise<void>;
   setWindowSize: (width: number, height: number) => Promise<void>;
   setUndetectable: (state: boolean) => Promise<void>;
-
-  // --- Network ---
-  proxyRequest: (options: { url: string; method: string; headers?: any; body?: any }) => Promise<{ status: number; data: any }>;
-
-  // --- Updates ---
+  proxyRequest: (options: any) => Promise<any>;
   checkForUpdates: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   quitAndInstall: () => Promise<void>;
@@ -24,14 +17,12 @@ interface ElectronAPI {
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
-    // For Speech Recognition
     SpeechRecognition: any;
     webkitSpeechRecognition: any;
   }
 }
 
-// --- Module Declarations to Fix Build Errors ---
-
+// --- FIX FOR GITHUB BUILD ERRORS ---
 declare module 'react-syntax-highlighter' {
   export const Prism: any;
   export const Light: any;
