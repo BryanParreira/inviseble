@@ -8,46 +8,47 @@ It is designed to be **heard and felt, but rarely seen.**
 
 ## ✨ Core Philosophy
 
-* **Invisible by Default**: Aura runs in "Ghost Mode," allowing you to click through the interface and interact with your work as if nothing is there.
-* **Context Aware**: With a single click, Aura can see what you see, analyzing your screen to provide relevant answers to what you are working on.
-* **Privacy First**: Built with support for **Local AI (Ollama)**, ensuring your data never has to leave your machine.
+- **Invisible by Default**: Aura runs in "Ghost Mode," allowing you to click through the interface and interact with your work as if nothing is there.
+- **Context Aware**: With a single click, Aura can see what you see, analyzing your screen to provide relevant answers to what you are working on.
+- **Privacy First**: Built with support for **Local AI (Ollama)**, ensuring your data never has to leave your machine.
 
 ## 🚀 Features
 
-* **👻 Ghost Mode**: A completely transparent overlay that doesn't interfere with your mouse clicks or application focus.
-* **🧠 Dual Intelligence**:
-    * **Local Brain**: Connect to **Ollama** for private, offline, latency-free intelligence (Llama 3, Mistral, etc.).
-    * **Cloud Brain**: Switch to **OpenAI (GPT-4)** when you need maximum reasoning power.
-* **👁️ Screen Vision**: Instantly capture and analyze your current screen state to debug code, summarize documents, or extract data.
-* **🎤 Live Voice Mode**: Speak to Aura naturally. It listens in the background and responds instantly, perfect for hands-free coding or multitasking.
-* **⚡ Instant Wake**: Toggle the interface instantly with a global hotkey.
+- **👻 Ghost Mode**: A completely transparent overlay that doesn't interfere with your mouse clicks or application focus.
+- **🧠 Dual Intelligence**:
+  - **Local Brain**: Connect to **Ollama** for private, offline, latency-free intelligence (Llama 3, Mistral, etc.).
+  - **Cloud Brain**: Switch to **OpenAI (GPT-4)** when you need maximum reasoning power.
+- **👁️ Screen Vision**: Instantly capture and analyze your current screen state to debug code, summarize documents, or extract data.
+- **🎤 Live Voice Mode**: Speak to Aura naturally. It listens in the background and responds instantly, perfect for hands-free coding or multitasking.
+- **⚡ Instant Wake**: Toggle the interface instantly with a global hotkey.
 
 ## 🛠️ Tech Stack
 
 Built with modern, high-performance web technologies wrapped in a native shell:
 
-* **Core**: [Electron](https://www.electronjs.org/) (with specialized transparency & click-through handling)
-* **Frontend**: [React](https://react.dev/) + [Vite](https://vitejs.dev/)
-* **Language**: TypeScript
-* **Styling**: Custom CSS & Glassmorphism effects
-* **Update System**: Electron-Updater
+- **Core**: [Electron](https://www.electronjs.org/) (with specialized transparency & click-through handling)
+- **Frontend**: [React](https://react.dev/) + [Vite](https://vitejs.dev/)
+- **Language**: TypeScript
+- **Styling**: Custom CSS & Glassmorphism effects
+- **Update System**: Electron-Updater
 
 ## ⌨️ Global Shortcuts
 
-| Shortcut (Mac) | Shortcut (Windows) | Action |
-| :--- | :--- | :--- |
+| Shortcut (Mac)    | Shortcut (Windows) | Action                                       |
+| :---------------- | :----------------- | :------------------------------------------- |
 | `Cmd + Shift + G` | `Ctrl + Shift + G` | **Wake / Sleep** (Toggle Visibility & Focus) |
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
-* **Node.js**: Version 18 or higher.
-* **Ollama (Optional)**: If you wish to use the local privacy features, install [Ollama](https://ollama.com/) and download a model (e.g., `ollama run llama3`).
+- **Node.js**: Version 18 or higher.
+- **Ollama (Optional)**: If you wish to use the local privacy features, install [Ollama](https://ollama.com/) and download a model (e.g., `ollama run llama3`).
 
 ### Installation
 
 1.  **Clone the repository**
+
     ```bash
     git clone [https://github.com/bryanparreira/aura.git](https://github.com/bryanparreira/aura.git)
     cd aura
@@ -64,3 +65,43 @@ Run the app in development mode with hot-reloading:
 
 ```bash
 npm run electron:dev
+📦 Building for Production
+To create an executable installer for your operating system:
+
+Bash
+npm run electron:build
+Windows: Generates an .exe installer in dist-electron/
+
+Mac: Generates a .dmg installer in dist-electron/
+
+⚙️ Configuration
+Aura works out of the box, but you can customize its brain:
+
+Open Settings: Click the ⚙️ icon in the chat header.
+
+Select Provider:
+
+Ollama: Ensure Ollama is running on localhost:11434. Aura will automatically detect your downloaded models.
+
+OpenAI: Enter your valid API Key to unlock GPT-4 capabilities.
+
+System Prompt: Define Aura's persona (e.g., "You are a senior React engineer", "Be concise and witty").
+
+🤝 Contributing
+Contributions are welcome! If you have ideas on how to make Aura even more seamless, please feel free to submit a Pull Request.
+
+Fork the Project
+
+Create your Feature Branch (git checkout -b feature/AmazingFeature)
+
+Commit your Changes (git commit -m 'Add some AmazingFeature')
+
+Push to the Branch (git push origin feature/AmazingFeature)
+
+Open a Pull Request
+
+📄 License
+Distributed under the MIT License. See LICENSE for more information.
+
+Made with 💜 by Bryan Parreira
+```
