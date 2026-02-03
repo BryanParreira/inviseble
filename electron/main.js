@@ -1,9 +1,10 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Menu, screen, session, systemPreferences, net } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Menu, Tray, screen, session, systemPreferences, net } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
 let win;
+let tray = null;
 
 // --- UPDATE CONFIG ---
 autoUpdater.autoDownload = true;
@@ -20,6 +21,31 @@ async function checkMacPermissions() {
   }
 }
 
+function createTray() {
+  const iconPath = process.platform === 'win32' 
+    ? path.join(__dirname, '../build/icon.ico') 
+    : path.join(__dirname, '../build/icons/16x16.png');
+
+  try {
+    tray = new Tray(iconPath);
+    const contextMenu = Menu.buildFromTemplate([
+      { label: 'Show Aura', click: () => { win.show(); win.webContents.send('app-woke-up'); } },
+      { label: 'Hide Aura', click: () => win.hide() },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() }
+    ]);
+    tray.setToolTip('Aura');
+    tray.setContextMenu(contextMenu);
+    
+    tray.on('click', () => {
+      if (win.isVisible()) win.hide();
+      else { win.show(); win.webContents.send('app-woke-up'); }
+    });
+  } catch (e) {
+    console.log("Tray icon could not be loaded, continuing without tray.");
+  }
+}
+
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -30,7 +56,7 @@ function createWindow() {
     type: 'panel', 
     enableLargerThanScreen: true,
     hasShadow: false,
-    alwaysOnTop: true,
+    alwaysOnTop: true, // Default is pinned
     transparent: true,
     frame: false,
     resizable: false,
@@ -67,6 +93,11 @@ function createWindow() {
 
 // --- IPC HANDLERS ---
 
+// NEW: Toggle Always on Top
+ipcMain.handle('toggle-always-on-top', (event, flag) => {
+  if (win) win.setAlwaysOnTop(flag, 'screen-saver');
+});
+
 ipcMain.handle('proxy-request', async (event, { url, method, headers, body }) => {
   return new Promise((resolve, reject) => {
     const request = net.request({ url, method });
@@ -83,6 +114,34 @@ ipcMain.handle('proxy-request', async (event, { url, method, headers, body }) =>
     if (body) request.write(JSON.stringify(body));
     request.end();
   });
+});
+
+ipcMain.on('stream-request', (event, { url, method, headers, body, requestId }) => {
+  const request = net.request({ url, method });
+  Object.keys(headers).forEach(key => request.setHeader(key, headers[key]));
+  
+  request.on('response', (response) => {
+    response.on('data', (chunk) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('stream-response', { requestId, chunk: chunk.toString(), done: false });
+      }
+    });
+    
+    response.on('end', () => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('stream-response', { requestId, chunk: '', done: true });
+      }
+    });
+  });
+
+  request.on('error', (error) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('stream-response', { requestId, error: error.message, done: true });
+    }
+  });
+
+  if (body) request.write(JSON.stringify(body));
+  request.end();
 });
 
 ipcMain.handle('set-ignore-mouse', (event, ignore) => {
@@ -132,7 +191,7 @@ autoUpdater.on('error', (err) => {
 app.whenReady().then(async () => {
   await checkMacPermissions();
   createWindow();
-  // Check for updates immediately on startup if not in dev
+  createTray();
   if (!isDev) autoUpdater.checkForUpdatesAndNotify(); 
 });
 

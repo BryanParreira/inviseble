@@ -5,7 +5,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   quitApp: () => ipcRenderer.invoke('quit-app'),
   setIgnoreMouse: (ignore) => ipcRenderer.invoke('set-ignore-mouse', ignore),
   setUndetectable: (state) => ipcRenderer.invoke('set-undetectable', state),
+  
+  // NEW: Toggle Pin
+  toggleAlwaysOnTop: (flag) => ipcRenderer.invoke('toggle-always-on-top', flag),
+
   proxyRequest: (options) => ipcRenderer.invoke('proxy-request', options),
+  streamRequest: (options) => ipcRenderer.send('stream-request', options),
+  onStreamResponse: (callback) => ipcRenderer.on('stream-response', (_event, value) => callback(value)),
+  removeStreamListener: () => ipcRenderer.removeAllListeners('stream-response'),
+
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),

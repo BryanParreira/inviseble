@@ -1,9 +1,10 @@
 // @ts-nocheck
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Mic, MicOff, Settings, X, GripHorizontal, 
   Camera, Send, Eye, EyeOff, Power, Cpu, Terminal, 
-  RefreshCw, Download, AlertCircle, CheckCircle, Square, Trash2
+  RefreshCw, Download, CheckCircle, Square, Trash2,
+  Pin, PinOff // NEW Imports
 } from 'lucide-react';
 import { MarkdownMessage } from './MarkdownMessage';
 import './index.css';
@@ -47,7 +48,6 @@ const Draggable = ({ children, initialPos }) => {
 };
 
 const MainInterface = () => {
-  // 1. IMPROVEMENT: Load initial state from LocalStorage (Persistence)
   const [messages, setMessages] = useState(() => {
     const saved = localStorage.getItem('aura_history');
     return saved ? JSON.parse(saved) : [{ id: 1, text: "Welcome to Aura", sender: 'ai' }];
@@ -58,6 +58,7 @@ const MainInterface = () => {
   const [isLive, setIsLive] = useState(false);
   const [showChat, setShowChat] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [isPinned, setIsPinned] = useState(true); // NEW: Pinned State
   
   // Update State
   const [updateStatus, setUpdateStatus] = useState({ status: 'idle', percent: 0, error: null });
@@ -71,10 +72,10 @@ const MainInterface = () => {
   const [ollamaModels, setOllamaModels] = useState([]);
   const chatEndRef = useRef(null);
   
-  // 2. IMPROVEMENT: Stop Generating Capability
-  const abortController = useRef(null);
+  // Streaming Ref Control
+  const activeRequestId = useRef(null);
+  const abortController = useRef(false);
 
-  // 3. IMPROVEMENT: Persist Chat History
   useEffect(() => {
     localStorage.setItem('aura_history', JSON.stringify(messages));
   }, [messages]);
@@ -82,11 +83,13 @@ const MainInterface = () => {
   useEffect(() => {
     window.electronAPI.setIgnoreMouse(true);
     if (config.provider === 'ollama') fetchOllamaModels();
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    
+    setTimeout(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 50);
 
     // Update Listener
     window.electronAPI.onUpdateMsg((msg) => {
-      console.log("Update Msg:", msg);
       if (msg.status === 'available') setUpdateStatus({ status: 'available', percent: 0 });
       if (msg.status === 'downloading') setUpdateStatus({ status: 'downloading', percent: Math.round(msg.percent) });
       if (msg.status === 'ready') setUpdateStatus({ status: 'ready', percent: 100 });
@@ -94,7 +97,79 @@ const MainInterface = () => {
       if (msg.status === 'error') setUpdateStatus({ status: 'error', error: msg.error });
     });
 
+    // STREAM LISTENER
+    window.electronAPI.onStreamResponse((res) => {
+      if (res.requestId !== activeRequestId.current || abortController.current) return;
+
+      if (res.error) {
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last.sender === 'ai') {
+            return [...prev.slice(0, -1), { ...last, text: "Error: " + res.error, isLoading: false }];
+          }
+          return prev;
+        });
+        setIsLoading(false);
+        activeRequestId.current = null;
+        return;
+      }
+
+      if (res.done) {
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last.sender === 'ai') return [...prev.slice(0, -1), { ...last, isLoading: false }];
+          return prev;
+        });
+        setIsLoading(false);
+        activeRequestId.current = null;
+      } else {
+        handleStreamChunk(res.chunk);
+      }
+    });
+
+    return () => {
+      window.electronAPI.removeStreamListener();
+    };
   }, [messages, config.provider]);
+
+  const handleStreamChunk = (chunk) => {
+    let token = "";
+    if (config.provider === 'ollama') {
+      try {
+        const lines = chunk.split('\n').filter(l => l.trim() !== '');
+        for (const line of lines) {
+          const json = JSON.parse(line);
+          if (json.message && json.message.content) {
+            token += json.message.content;
+          }
+        }
+      } catch (e) { console.warn("Stream parse error:", e); }
+    } 
+    else if (config.provider === 'openai') {
+      const lines = chunk.split('\n').filter(line => line.trim() !== '');
+      for (const line of lines) {
+        if (line.includes('[DONE]')) return;
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+              token += data.choices[0].delta.content;
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    if (token) {
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last.sender === 'ai') {
+          return [...prev.slice(0, -1), { ...last, text: last.text + token }];
+        }
+        return prev;
+      });
+    }
+  };
 
   const fetchOllamaModels = async () => {
     try {
@@ -125,6 +200,13 @@ const MainInterface = () => {
     window.electronAPI.quitAndInstall();
   };
 
+  // NEW: Toggle Pin Logic
+  const togglePin = () => {
+    const newState = !isPinned;
+    setIsPinned(newState);
+    window.electronAPI.toggleAlwaysOnTop(newState);
+  };
+
   const handleCapture = async () => {
     try {
       const img = await window.electronAPI.captureScreen();
@@ -142,175 +224,128 @@ const MainInterface = () => {
   };
 
   const handleStop = () => {
-    if (abortController.current) {
-      abortController.current.abort();
-      abortController.current = null;
-    }
+    abortController.current = true;
     setIsLoading(false);
+    activeRequestId.current = null;
   };
 
   const clearHistory = () => {
     setMessages([{ id: 1, text: "Welcome to Aura", sender: 'ai' }]);
   };
 
-  // 4. IMPROVEMENT: Context-Aware AI Call
   const callAI = async (prompt, img = null) => {
-    // Stop previous request if active
-    if (abortController.current) abortController.current.abort();
-    abortController.current = new AbortController();
-
+    abortController.current = false;
+    const requestId = Date.now().toString();
+    activeRequestId.current = requestId;
     setIsLoading(true);
-    try {
-      const { provider, apiKey, model, systemContext } = config;
-      let responseText = "";
-      const imageBase64 = img ? img.split(',')[1] : null;
 
-      // Prepare History (Last 10 messages to maintain context window)
-      const history = messages.slice(-10).map(m => ({
-        role: m.sender === 'ai' ? 'assistant' : 'user',
-        content: m.text
-      }));
+    setMessages(p => [...p, { id: Date.now() + 1, text: "", sender: 'ai', isLoading: true }]);
 
-      // Add System Prompt
-      const fullMessages = [
-        { role: 'system', content: systemContext || DEFAULT_SYSTEM },
-        ...history
-      ];
+    const { provider, apiKey, model, systemContext } = config;
+    const imageBase64 = img ? img.split(',')[1] : null;
 
-      if (provider === 'ollama') {
-        // Construct Ollama payload
-        const newMessage = { role: 'user', content: prompt };
-        if (imageBase64) newMessage.images = [imageBase64];
-        
-        const res = await window.electronAPI.proxyRequest({
-          url: 'http://localhost:11434/api/chat',
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: { 
-            model: model || 'llama3', 
-            messages: [...fullMessages, newMessage], 
-            stream: false 
-          }
-        });
-        
-        if (abortController.current?.signal.aborted) return;
-        responseText = res.data.message?.content || "No response from Ollama.";
-      } 
-      else if (provider === 'openai') {
-        // Construct OpenAI payload
-        const content = [{ type: "text", text: prompt }];
-        if (imageBase64) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
-        
-        const res = await window.electronAPI.proxyRequest({
-          url: 'https://api.openai.com/v1/chat/completions',
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-          body: { 
-            model: model || 'gpt-4o', 
-            messages: [...fullMessages, { role: 'user', content }] 
-          }
-        });
+    const history = messages.slice(-10).map(m => ({
+      role: m.sender === 'ai' ? 'assistant' : 'user',
+      content: m.text
+    }));
 
-        if (abortController.current?.signal.aborted) return;
-        responseText = res.data.choices?.[0]?.message?.content || "No response from OpenAI.";
-      }
+    const fullMessages = [
+      { role: 'system', content: systemContext || DEFAULT_SYSTEM },
+      ...history
+    ];
 
-      setMessages(p => [...p, { id: Date.now(), text: responseText, sender: 'ai' }]);
-    } catch (e) {
-      if (!abortController.current?.signal.aborted) {
-        setMessages(p => [...p, { id: Date.now(), text: `Error: ${e.message || "Connection failed"}`, sender: 'ai' }]);
-      }
-    } finally {
-      setIsLoading(false);
-      abortController.current = null;
+    if (provider === 'ollama') {
+      const newMessage = { role: 'user', content: prompt };
+      if (imageBase64) newMessage.images = [imageBase64];
+
+      window.electronAPI.streamRequest({
+        url: 'http://localhost:11434/api/chat',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: { 
+          model: model || 'llama3', 
+          messages: [...fullMessages, newMessage], 
+          stream: true 
+        },
+        requestId
+      });
+    } 
+    else if (provider === 'openai') {
+      const content = [{ type: "text", text: prompt }];
+      if (imageBase64) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
+
+      window.electronAPI.streamRequest({
+        url: 'https://api.openai.com/v1/chat/completions',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: { 
+          model: model || 'gpt-4o', 
+          messages: [...fullMessages, { role: 'user', content }],
+          stream: true
+        },
+        requestId
+      });
     }
   };
 
-  // 5. IMPROVEMENT: Real Voice Integration
-  // Use a ref to access the latest callAI function without triggering re-renders
   const callAIRef = useRef(callAI);
   useEffect(() => { callAIRef.current = callAI; });
 
   useEffect(() => {
     let recognition = null;
-
     if (isLive) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
         recognition = new SpeechRecognition();
-        recognition.continuous = false; // Capture one sentence at a time
+        recognition.continuous = false; 
         recognition.interimResults = false;
         recognition.lang = 'en-US';
-
-        recognition.onstart = () => console.log("Voice listening started...");
-        
         recognition.onresult = (event) => {
           const transcript = event.results[0][0].transcript;
           if (transcript.trim()) {
-            setInput(transcript); // Show what was heard
-            // Auto-send logic
+            setInput(transcript); 
             setMessages(p => [...p, { id: Date.now(), text: transcript, sender: 'user' }]);
             callAIRef.current(transcript);
           }
         };
-
-        recognition.onerror = (e) => {
-          console.error("Speech error:", e.error);
-          // If not-allowed, turn off live mode
-          if (e.error === 'not-allowed') setIsLive(false);
-        };
-
-        recognition.onend = () => {
-          // Restart immediately to simulate continuous listening if still live
-          if (isLive) {
-            try { recognition.start(); } catch (e) {}
-          }
-        };
-
+        recognition.onend = () => { if (isLive) try { recognition.start(); } catch (e) {} };
         try { recognition.start(); } catch (e) {}
       } else {
-        alert("Speech Recognition not supported in this environment.");
+        alert("Speech Recognition not supported.");
         setIsLive(false);
       }
     }
-
-    return () => {
-      if (recognition) recognition.stop();
-    };
+    return () => { if (recognition) recognition.stop(); };
   }, [isLive]);
 
   return (
     <div className="invisible-canvas">
       <Draggable initialPos={{ x: window.innerWidth/2 - 200, y: 50 }}>
         
-        {/* --- NAV BAR (PILL) --- */}
+        {/* --- NAV BAR --- */}
         <div className={`glass-panel widget-pill ${isLoading ? 'thinking-border' : ''}`}>
           <div className="drag-handle"><GripHorizontal size={14} /></div>
           <div className="aura-orb-container"><div className={`aura-orb ${isLoading ? 'active' : ''}`} /></div>
-          
           <div className="divider" />
-
-          {/* Voice */}
+          
           <button className={`icon-btn ${isLive ? 'active-live' : ''}`} onClick={() => setIsLive(!isLive)} title="Toggle Voice">
             {isLive ? <Mic size={16} /> : <MicOff size={16} />}
           </button>
-
-          {/* Screenshot */}
-          <button className="icon-btn" onClick={handleCapture} title="Snap Screen">
-            <Camera size={16} />
+          
+          <button className="icon-btn" onClick={handleCapture} title="Snap Screen"><Camera size={16} /></button>
+          
+          <div className="divider" />
+          
+          {/* NEW: Pin Toggle Button */}
+          <button className={`icon-btn ${isPinned ? 'active-white' : ''}`} onClick={togglePin} title={isPinned ? "Unpin (Always on Top)" : "Pin"}>
+            {isPinned ? <Pin size={16} /> : <PinOff size={16} />}
           </button>
 
-          <div className="divider" />
-
-          {/* Show/Hide Chat */}
           <button className={`icon-btn ${showChat ? 'active-white' : ''}`} onClick={() => setShowChat(!showChat)} title="Toggle Chat">
             {showChat ? <Eye size={16} /> : <EyeOff size={16} />}
           </button>
-
-          {/* Quit App */}
-          <button className="icon-btn danger-hover" onClick={() => window.electronAPI.quitApp()} title="Quit Aura">
-            <Power size={16} />
-          </button>
+          
+          <button className="icon-btn danger-hover" onClick={() => window.electronAPI.quitApp()} title="Quit Aura"><Power size={16} /></button>
         </div>
 
         {/* --- CHAT WINDOW --- */}
@@ -320,12 +355,9 @@ const MainInterface = () => {
             {showSettings ? (
               <div className="settings-panel no-drag">
                 <div className="setting-header"><span>Config</span><button className="icon-btn" onClick={() => setShowSettings(false)}><X size={16}/></button></div>
-                
-                {/* Clear History Button added here */}
                 <button className="setting-input" onClick={clearHistory} style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'6px', cursor:'pointer', marginBottom:'10px', color: '#ff79c6'}}>
                   <Trash2 size={14}/> Clear Conversation History
                 </button>
-
                 <div className="setting-section"><div className="section-title"><Cpu size={12}/> Brain</div>
                   <div className="setting-row"><select className="setting-input" value={config.provider} onChange={e => setConfig({...config, provider: e.target.value})}><option value="ollama">Ollama (Local)</option><option value="openai">OpenAI</option></select></div>
                   {config.provider === 'ollama' ? 
@@ -335,49 +367,28 @@ const MainInterface = () => {
                 </div>
                 <div className="setting-section"><div className="section-title"><Terminal size={12}/> Persona</div><textarea className="setting-input area" value={config.systemContext} onChange={e => setConfig({...config, systemContext: e.target.value})} /></div>
                 
-                {/* --- UPDATE SECTION --- */}
                 <div className="setting-section" style={{marginTop: 'auto', marginBottom: '10px', background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '8px'}}>
                   <div className="section-title" style={{marginBottom:'5px'}}><RefreshCw size={12}/> Updates</div>
-                  
                   {updateStatus.status === 'idle' && (
                     <button className="setting-input" onClick={checkForUpdates} style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'6px', cursor:'pointer'}}>
                       <RefreshCw size={14}/> Check for Updates
                     </button>
                   )}
-
-                  {updateStatus.status === 'checking' && (
-                    <div style={{fontSize:'12px', color:'#aaa', textAlign:'center', padding:'5px'}}>Checking...</div>
-                  )}
-
-                  {updateStatus.status === 'available' && (
-                    <div style={{fontSize:'12px', color:'#3b82f6', textAlign:'center', padding:'5px'}}>Update found! Downloading...</div>
-                  )}
-
+                  {updateStatus.status === 'checking' && <div style={{fontSize:'12px', color:'#aaa', textAlign:'center', padding:'5px'}}>Checking...</div>}
+                  {updateStatus.status === 'available' && <div style={{fontSize:'12px', color:'#3b82f6', textAlign:'center', padding:'5px'}}>Update found! Downloading...</div>}
                   {updateStatus.status === 'downloading' && (
                     <div style={{width:'100%', background:'rgba(255,255,255,0.1)', height:'6px', borderRadius:'3px', overflow:'hidden'}}>
                       <div style={{width: `${updateStatus.percent}%`, background:'#3b82f6', height:'100%'}} />
                     </div>
                   )}
-
                   {updateStatus.status === 'ready' && (
                     <button className="setting-input" onClick={quitAndInstall} style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'6px', cursor:'pointer', background:'rgba(34, 197, 94, 0.2)', color:'#4ade80'}}>
                       <Download size={14}/> Restart & Install
                     </button>
                   )}
-
-                  {updateStatus.status === 'uptodate' && (
-                    <div style={{fontSize:'12px', color:'#4ade80', textAlign:'center', padding:'5px', display:'flex', alignItems:'center', justifyContent:'center', gap:'5px'}}>
-                      <CheckCircle size={14}/> Aura is up to date
-                    </div>
-                  )}
-
-                  {updateStatus.status === 'error' && (
-                    <div style={{fontSize:'11px', color:'#ef4444', textAlign:'center', padding:'5px'}}>
-                      Error: {updateStatus.error}
-                    </div>
-                  )}
+                  {updateStatus.status === 'uptodate' && <div style={{fontSize:'12px', color:'#4ade80', textAlign:'center', padding:'5px', display:'flex', alignItems:'center', justifyContent:'center', gap:'5px'}}><CheckCircle size={14}/> Aura is up to date</div>}
+                  {updateStatus.status === 'error' && <div style={{fontSize:'11px', color:'#ef4444', textAlign:'center', padding:'5px'}}>Error: {updateStatus.error}</div>}
                 </div>
-
                 <button className="save-btn" onClick={saveSettings}>Save</button>
               </div>
             ) : (
@@ -391,23 +402,26 @@ const MainInterface = () => {
                   {messages.map((m) => (
                     <div key={m.id} className={`msg-row ${m.sender}`}>
                       <div className="msg-bubble">
-                        {m.isImage ? "📸 Screen Captured" : <MarkdownMessage content={m.text}/>}
+                        {m.isImage ? (
+                          "📸 Screen Captured"
+                        ) : m.sender === 'ai' && !m.text ? (
+                          <div className="thinking-bubble">
+                            <div className="dot" />
+                            <div className="dot" />
+                            <div className="dot" />
+                          </div>
+                        ) : (
+                          <MarkdownMessage content={m.text} />
+                        )}
                       </div>
                     </div>
                   ))}
-                  {isLoading && (
-                    <div className="msg-row ai">
-                      <div className="msg-bubble thinking-bubble"><div className="dot"/><div className="dot"/><div className="dot"/></div>
-                    </div>
-                  )}
                   <div ref={chatEndRef} />
                 </div>
 
                 <div className="input-area no-drag">
                   <div className="input-glass">
                     <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} placeholder="Ask Aura..." />
-                    
-                    {/* Send / Stop Toggle */}
                     {isLoading ? (
                       <button className="icon-btn" onClick={handleStop} title="Stop Generating">
                         <Square size={14} fill="currentColor" />

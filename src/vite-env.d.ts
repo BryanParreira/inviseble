@@ -4,9 +4,16 @@ interface ElectronAPI {
   captureScreen: () => Promise<string>;
   quitApp: () => Promise<void>;
   setIgnoreMouse: (ignore: boolean, options?: any) => Promise<void>;
-  setWindowSize: (width: number, height: number) => Promise<void>;
   setUndetectable: (state: boolean) => Promise<void>;
+  
+  // NEW: Toggle Pin Definition
+  toggleAlwaysOnTop: (flag: boolean) => Promise<void>;
+
   proxyRequest: (options: any) => Promise<any>;
+  streamRequest: (options: any) => void;
+  onStreamResponse: (callback: (response: any) => void) => void;
+  removeStreamListener: () => void;
+
   checkForUpdates: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   quitAndInstall: () => Promise<void>;
