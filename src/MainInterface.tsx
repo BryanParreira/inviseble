@@ -4,7 +4,7 @@ import {
   Mic, MicOff, Settings, X, GripHorizontal, 
   Camera, Send, Eye, EyeOff, Power, Cpu, Terminal, 
   RefreshCw, Download, CheckCircle, Square, Trash2,
-  Pin, PinOff // NEW Imports
+  Pin, PinOff
 } from 'lucide-react';
 import { MarkdownMessage } from './MarkdownMessage';
 import './index.css';
@@ -18,14 +18,20 @@ const Draggable = ({ children, initialPos }) => {
   const dragOffset = useRef({ x: 0, y: 0 });
 
   const handleMouseDown = (e) => {
+    // Allow interaction with form elements and buttons
     if (e.target.closest('button') || e.target.closest('input') || e.target.closest('select') || e.target.closest('textarea') || e.target.closest('.no-drag')) return;
+    
     isDragging.current = true;
     dragOffset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
     window.electronAPI.setIgnoreMouse(false);
   };
 
   useEffect(() => {
-    const move = (e) => { if (isDragging.current) setPos({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y }); };
+    const move = (e) => { 
+      if (isDragging.current) {
+        setPos({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y }); 
+      }
+    };
     const up = () => { isDragging.current = false; };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -33,7 +39,9 @@ const Draggable = ({ children, initialPos }) => {
   }, []);
 
   const handleMouseEnter = () => window.electronAPI.setIgnoreMouse(false);
-  const handleMouseLeave = () => { if (!isDragging.current) window.electronAPI.setIgnoreMouse(true); };
+  const handleMouseLeave = () => { 
+    if (!isDragging.current) window.electronAPI.setIgnoreMouse(true); 
+  };
 
   return (
     <div 
@@ -58,9 +66,8 @@ const MainInterface = () => {
   const [isLive, setIsLive] = useState(false);
   const [showChat, setShowChat] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  const [isPinned, setIsPinned] = useState(true); // NEW: Pinned State
+  const [isPinned, setIsPinned] = useState(true);
   
-  // Update State
   const [updateStatus, setUpdateStatus] = useState({ status: 'idle', percent: 0, error: null });
 
   const [config, setConfig] = useState({
@@ -70,15 +77,29 @@ const MainInterface = () => {
     systemContext: localStorage.getItem('systemContext') || DEFAULT_SYSTEM
   });
   const [ollamaModels, setOllamaModels] = useState([]);
-  const chatEndRef = useRef(null);
   
-  // Streaming Ref Control
+  const chatEndRef = useRef(null);
+  const inputRef = useRef(null); // Reference to the input field
+  
   const activeRequestId = useRef(null);
   const abortController = useRef(false);
 
   useEffect(() => {
     localStorage.setItem('aura_history', JSON.stringify(messages));
   }, [messages]);
+
+  // --- FOCUS RESTORATION LOGIC ---
+  // Fixes the issue where clicking back into the app doesn't let you type
+  useEffect(() => {
+    const handleFocus = () => {
+      // If chat is showing and settings are closed, force focus to input
+      if (showChat && !showSettings && inputRef.current) {
+        inputRef.current.focus();
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [showChat, showSettings]);
 
   useEffect(() => {
     window.electronAPI.setIgnoreMouse(true);
@@ -88,7 +109,6 @@ const MainInterface = () => {
       chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, 50);
 
-    // Update Listener
     window.electronAPI.onUpdateMsg((msg) => {
       if (msg.status === 'available') setUpdateStatus({ status: 'available', percent: 0 });
       if (msg.status === 'downloading') setUpdateStatus({ status: 'downloading', percent: Math.round(msg.percent) });
@@ -97,7 +117,6 @@ const MainInterface = () => {
       if (msg.status === 'error') setUpdateStatus({ status: 'error', error: msg.error });
     });
 
-    // STREAM LISTENER
     window.electronAPI.onStreamResponse((res) => {
       if (res.requestId !== activeRequestId.current || abortController.current) return;
 
@@ -139,9 +158,7 @@ const MainInterface = () => {
         const lines = chunk.split('\n').filter(l => l.trim() !== '');
         for (const line of lines) {
           const json = JSON.parse(line);
-          if (json.message && json.message.content) {
-            token += json.message.content;
-          }
+          if (json.message && json.message.content) token += json.message.content;
         }
       } catch (e) { console.warn("Stream parse error:", e); }
     } 
@@ -200,7 +217,6 @@ const MainInterface = () => {
     window.electronAPI.quitAndInstall();
   };
 
-  // NEW: Toggle Pin Logic
   const togglePin = () => {
     const newState = !isPinned;
     setIsPinned(newState);
@@ -322,7 +338,6 @@ const MainInterface = () => {
     <div className="invisible-canvas">
       <Draggable initialPos={{ x: window.innerWidth/2 - 200, y: 50 }}>
         
-        {/* --- NAV BAR --- */}
         <div className={`glass-panel widget-pill ${isLoading ? 'thinking-border' : ''}`}>
           <div className="drag-handle"><GripHorizontal size={14} /></div>
           <div className="aura-orb-container"><div className={`aura-orb ${isLoading ? 'active' : ''}`} /></div>
@@ -336,7 +351,6 @@ const MainInterface = () => {
           
           <div className="divider" />
           
-          {/* NEW: Pin Toggle Button */}
           <button className={`icon-btn ${isPinned ? 'active-white' : ''}`} onClick={togglePin} title={isPinned ? "Unpin (Always on Top)" : "Pin"}>
             {isPinned ? <Pin size={16} /> : <PinOff size={16} />}
           </button>
@@ -348,7 +362,6 @@ const MainInterface = () => {
           <button className="icon-btn danger-hover" onClick={() => window.electronAPI.quitApp()} title="Quit Aura"><Power size={16} /></button>
         </div>
 
-        {/* --- CHAT WINDOW --- */}
         {showChat && (
           <div className={`glass-panel chat-window ${isLoading ? 'thinking-border' : ''}`}>
             
@@ -421,7 +434,8 @@ const MainInterface = () => {
 
                 <div className="input-area no-drag">
                   <div className="input-glass">
-                    <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} placeholder="Ask Aura..." />
+                    {/* Added ref={inputRef} here */}
+                    <input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} placeholder="Ask Aura..." />
                     {isLoading ? (
                       <button className="icon-btn" onClick={handleStop} title="Stop Generating">
                         <Square size={14} fill="currentColor" />
